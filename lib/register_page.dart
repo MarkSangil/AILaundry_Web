@@ -1,22 +1,24 @@
-import 'package:ailaundry_web/dashboard_page.dart';
-import 'package:ailaundry_web/register_page.dart';
+import 'package:ailaundry_web/login_page.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+class RegisterPage extends StatefulWidget {
+  const RegisterPage({super.key});
 
   @override
-  State<LoginPage> createState() => _LoginPageState();
+  State<RegisterPage> createState() => _RegisterPageState();
 }
 
-class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
+class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMixin {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _loading = false;
   bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
   String? _error;
+  String? _successMessage;
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -45,42 +47,49 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     _animationController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _register() async {
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _loading = true);
-    setState(() => _error = null);
+    setState(() {
+      _loading = true;
+      _error = null;
+      _successMessage = null;
+    });
 
     try {
-      final response = await Supabase.instance.client.auth.signInWithPassword(
+      final response = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
 
-      final user = response.user;
-      if (user == null) {
-        setState(() => _error = "Invalid login credentials");
-        return;
-      }
+      if (response.user != null) {
+        setState(() {
+          _successMessage = "Registration successful! Please check your email to confirm your account.";
+        });
 
-      if (user.emailConfirmedAt == null) {
-        setState(() => _error = "Please confirm your email before logging in.");
-        return;
-      }
-
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => const DashboardPage(),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-          ),
-        );
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              PageRouteBuilder(
+                pageBuilder: (context, animation, secondaryAnimation) => const LoginPage(),
+                transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                  return SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(-1.0, 0.0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  );
+                },
+              ),
+            );
+          }
+        });
       }
     } catch (e) {
       setState(() => _error = e.toString());
@@ -89,22 +98,8 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     }
   }
 
-  void _goToRegister() {
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => const RegisterPage(),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return SlideTransition(
-            position: Tween<Offset>(
-              begin: const Offset(1.0, 0.0),
-              end: Offset.zero,
-            ).animate(animation),
-            child: child,
-          );
-        },
-      ),
-    );
+  void _goToLogin() {
+    Navigator.pop(context);
   }
 
   String? _validateEmail(String? value) {
@@ -124,7 +119,75 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     if (value.length < 6) {
       return 'Password must be at least 6 characters';
     }
+    if (!RegExp(r'^(?=.*[a-zA-Z])(?=.*\d)').hasMatch(value)) {
+      return 'Password must contain at least one letter and one number';
+    }
     return null;
+  }
+
+  String? _validateConfirmPassword(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Please confirm your password';
+    }
+    if (value != _passwordController.text) {
+      return 'Passwords do not match';
+    }
+    return null;
+  }
+
+  Widget _buildPasswordStrengthIndicator(String password) {
+    int strength = 0;
+    if (password.length >= 6) strength++;
+    if (password.contains(RegExp(r'[A-Z]'))) strength++;
+    if (password.contains(RegExp(r'[0-9]'))) strength++;
+    if (password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) strength++;
+
+    Color strengthColor = strength == 0
+        ? Colors.grey
+        : strength <= 1
+        ? Colors.red
+        : strength <= 2
+        ? Colors.orange
+        : strength <= 3
+        ? Colors.yellow[700]!
+        : Colors.green;
+
+    String strengthText = strength == 0
+        ? 'Very Weak'
+        : strength <= 1
+        ? 'Weak'
+        : strength <= 2
+        ? 'Fair'
+        : strength <= 3
+        ? 'Good'
+        : 'Strong';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: LinearProgressIndicator(
+                value: strength / 4,
+                backgroundColor: Colors.grey[300],
+                valueColor: AlwaysStoppedAnimation<Color>(strengthColor),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              strengthText,
+              style: TextStyle(
+                fontSize: 12,
+                color: strengthColor,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
@@ -133,6 +196,14 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
     final size = MediaQuery.of(context).size;
 
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios),
+          onPressed: _goToLogin,
+        ),
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -181,14 +252,14 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                     shape: BoxShape.circle,
                                   ),
                                   child: Icon(
-                                    Icons.local_laundry_service_rounded,
+                                    Icons.person_add_outlined,
                                     size: 40,
                                     color: theme.colorScheme.primary,
                                   ),
                                 ),
 
                                 Text(
-                                  "Welcome Back",
+                                  "Create Account",
                                   style: theme.textTheme.headlineMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: theme.colorScheme.onSurface,
@@ -197,7 +268,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  "Sign in to your AI Laundry account",
+                                  "Join AI Laundry as an admin",
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -226,8 +297,8 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                   controller: _passwordController,
                                   validator: _validatePassword,
                                   obscureText: _obscurePassword,
-                                  textInputAction: TextInputAction.done,
-                                  onFieldSubmitted: (_) => _login(),
+                                  textInputAction: TextInputAction.next,
+                                  onChanged: (value) => setState(() {}),
                                   decoration: InputDecoration(
                                     labelText: "Password",
                                     prefixIcon: const Icon(Icons.lock_outlined),
@@ -250,6 +321,71 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                     fillColor: theme.colorScheme.surface,
                                   ),
                                 ),
+
+                                if (_passwordController.text.isNotEmpty)
+                                  _buildPasswordStrengthIndicator(_passwordController.text),
+
+                                const SizedBox(height: 16),
+
+                                TextFormField(
+                                  controller: _confirmPasswordController,
+                                  validator: _validateConfirmPassword,
+                                  obscureText: _obscureConfirmPassword,
+                                  textInputAction: TextInputAction.done,
+                                  onFieldSubmitted: (_) => _register(),
+                                  decoration: InputDecoration(
+                                    labelText: "Confirm Password",
+                                    prefixIcon: const Icon(Icons.lock_outline_rounded),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                        _obscureConfirmPassword
+                                            ? Icons.visibility_outlined
+                                            : Icons.visibility_off_outlined,
+                                      ),
+                                      onPressed: () {
+                                        setState(() {
+                                          _obscureConfirmPassword = !_obscureConfirmPassword;
+                                        });
+                                      },
+                                    ),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    filled: true,
+                                    fillColor: theme.colorScheme.surface,
+                                  ),
+                                ),
+
+                                if (_successMessage != null) ...[
+                                  const SizedBox(height: 16),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.green.withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(color: Colors.green.withOpacity(0.3)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.check_circle_outline,
+                                          color: Colors.green[700],
+                                          size: 20,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            _successMessage!,
+                                            style: TextStyle(
+                                              color: Colors.green[700],
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
 
                                 if (_error != null) ...[
                                   const SizedBox(height: 16),
@@ -286,7 +422,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                 SizedBox(
                                   height: 50,
                                   child: ElevatedButton(
-                                    onPressed: _loading ? null : _login,
+                                    onPressed: _loading ? null : _register,
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: theme.colorScheme.primary,
                                       foregroundColor: theme.colorScheme.onPrimary,
@@ -307,7 +443,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                       ),
                                     )
                                         : const Text(
-                                      "Sign In",
+                                      "Create Account",
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w600,
@@ -319,39 +455,24 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                                 const SizedBox(height: 20),
 
                                 Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Expanded(child: Divider(color: theme.colorScheme.outline)),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                                      child: Text(
-                                        "or",
+                                    Text(
+                                      "Already have an account? ",
+                                      style: TextStyle(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: _goToLogin,
+                                      child: const Text(
+                                        "Sign In",
                                         style: TextStyle(
-                                          color: theme.colorScheme.onSurfaceVariant,
-                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
                                     ),
-                                    Expanded(child: Divider(color: theme.colorScheme.outline)),
                                   ],
-                                ),
-
-                                const SizedBox(height: 20),
-
-                                OutlinedButton(
-                                  onPressed: _goToRegister,
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    "Create New Account",
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
                                 ),
                               ],
                             ),

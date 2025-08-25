@@ -1,6 +1,7 @@
+import 'package:ailaundry_web/dashboard_page.dart';
+import 'package:ailaundry_web/login_page.dart';
 import 'package:flutter/material.dart';
-import 'login_page.dart';
-import 'dashboard_page.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
