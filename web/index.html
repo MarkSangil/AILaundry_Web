@@ -33,6 +33,78 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // COMPLETELY BLOCK service worker during development
+    // This must run SYNCHRONOUSLY before any other scripts
+    (function() {
+      'use strict';
+      
+      if ('serviceWorker' in navigator) {
+        // IMMEDIATELY override register BEFORE Flutter can use it
+        Object.defineProperty(navigator.serviceWorker, 'register', {
+          value: function() {
+            console.warn('[Dev] Service worker registration BLOCKED');
+            return Promise.reject(new Error('Service workers disabled in development'));
+          },
+          writable: false,
+          configurable: false
+        });
+        
+        // Unregister any existing service workers
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+          registrations.forEach(function(registration) {
+            registration.unregister();
+          });
+        });
+        
+        // Aggressively monitor and unregister any that slip through
+        var unregisterInterval = setInterval(function() {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            if (registrations.length > 0) {
+              console.warn('[Dev] Force unregistering', registrations.length, 'service worker(s)');
+              registrations.forEach(function(registration) {
+                registration.unregister();
+              });
+            }
+          });
+        }, 100); // Check every 100ms
+      }
+      
+      // Clear ALL caches aggressively
+      function nukeCaches() {
+        if ('caches' in window) {
+          caches.keys().then(function(names) {
+            names.forEach(function(name) {
+              caches.delete(name);
+            });
+          });
+        }
+      }
+      
+      nukeCaches();
+      setInterval(nukeCaches, 500);
+      
+      // Note: Hot restart detection removed to prevent white screen issues
+      // For best results during development:
+      // 1. Use Hot Reload (r) instead of Hot Restart (R) for small changes
+      // 2. Use Full Restart (q then flutter run) for bigger changes
+      // 3. Keep DevTools Network tab open with "Disable cache" checked
+      
+      // Clear on visibility change
+      document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+          nukeCaches();
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+              registrations.forEach(function(registration) {
+                registration.unregister();
+              });
+            });
+          }
+        }
+      });
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

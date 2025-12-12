@@ -5,6 +5,9 @@ class ClothesItem {
   final String color;
   final String? imageUrl;
   final String? createdAt;
+  final String? status;
+  final String? washerId;
+  final String? checkerId;
 
   ClothesItem({
     required this.id,
@@ -13,6 +16,9 @@ class ClothesItem {
     required this.color,
     this.imageUrl,
     this.createdAt,
+    this.status,
+    this.washerId,
+    this.checkerId,
   });
 
   factory ClothesItem.fromMap(Map<String, dynamic> map) {
@@ -23,6 +29,9 @@ class ClothesItem {
       color: map['color'] ?? '',
       imageUrl: map['image_url'],
       createdAt: map['created_at'],
+      status: map['status'],
+      washerId: map['washer_id'],
+      checkerId: map['checker_id'],
     );
   }
 }

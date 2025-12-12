@@ -1,24 +1,27 @@
-import 'package:ailaundry_web/login_page.dart';
+import 'package:ailaundry_web/admin_login_page.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class RegisterPage extends StatefulWidget {
-  const RegisterPage({super.key});
+class AdminRegisterPage extends StatefulWidget {
+  const AdminRegisterPage({super.key});
 
   @override
-  State<RegisterPage> createState() => _RegisterPageState();
+  State<AdminRegisterPage> createState() => _AdminRegisterPageState();
 }
 
-class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMixin {
+class _AdminRegisterPageState extends State<AdminRegisterPage> with TickerProviderStateMixin {
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _loading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   String? _error;
   String? _successMessage;
+  String _selectedRole = 'admin';
 
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
@@ -45,9 +48,11 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
   @override
   void dispose() {
     _animationController.dispose();
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _phoneController.dispose();
     super.dispose();
   }
 
@@ -61,36 +66,95 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
     });
 
     try {
-      final response = await Supabase.instance.client.auth.signUp(
+      // Step 1: Create auth user with metadata to store registration data
+      final authResponse = await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
+        data: {
+          'name': _nameController.text.trim(),
+          'role': _selectedRole,
+          'pending_profile': true, // Flag to indicate profile needs completion
+        },
       );
 
-      if (response.user != null) {
-        setState(() {
-          _successMessage = "Registration successful! Please check your email to confirm your account.";
-        });
+      if (authResponse.user == null) {
+        setState(() => _error = "Failed to create user account");
+        return;
+      }
 
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              PageRouteBuilder(
-                pageBuilder: (context, animation, secondaryAnimation) => const LoginPage(),
-                transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                  return SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(-1.0, 0.0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  );
-                },
-              ),
-            );
+      final userId = authResponse.user!.id;
+
+      // Step 2: Create user record in laundry_users table
+      // Try using database function first (bypasses RLS), then fall back to direct insert
+      bool userRecordCreated = false;
+      try {
+        // Try calling the database function first (if it exists)
+        try {
+          await Supabase.instance.client.rpc('create_laundry_user', params: {
+            'p_user_id': userId,
+            'p_name': _nameController.text.trim(),
+            'p_email': _emailController.text.trim(),
+            'p_role': _selectedRole,
+          });
+          userRecordCreated = true;
+        } catch (rpcError) {
+          // Function might not exist, try direct insert
+          if (rpcError.toString().contains('function') || 
+              rpcError.toString().contains('does not exist')) {
+            // Function doesn't exist, try direct insert
+            try {
+              await Supabase.instance.client.from('laundry_users').insert({
+                'id': userId,
+                'name': _nameController.text.trim(),
+                'email': _emailController.text.trim(),
+                'role': _selectedRole,
+              });
+              userRecordCreated = true;
+            } catch (insertError) {
+              // Direct insert also failed (likely RLS)
+              userRecordCreated = false;
+            }
+          } else {
+            // Other RPC error
+            userRecordCreated = false;
           }
+        }
+      } catch (e) {
+        // All methods failed
+        userRecordCreated = false;
+      }
+
+      // Show appropriate success message
+      if (userRecordCreated) {
+        setState(() {
+          _successMessage = "Admin account created successfully! ${authResponse.user?.emailConfirmedAt == null ? 'Please check your email to confirm your account, then you can sign in.' : 'You can now sign in.'}";
+        });
+      } else {
+        setState(() {
+          _successMessage = "Auth account created successfully! Please check your email to confirm your account. After confirmation and login, you'll complete your profile.";
         });
       }
+
+      // Always redirect to login page after 3 seconds (regardless of email confirmation status)
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            PageRouteBuilder(
+              pageBuilder: (context, animation, secondaryAnimation) => const AdminLoginPage(),
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                return SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(-1.0, 0.0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                );
+              },
+            ),
+          );
+        }
+      });
     } catch (e) {
       setState(() => _error = e.toString());
     } finally {
@@ -99,7 +163,31 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
   }
 
   void _goToLogin() {
-    Navigator.pop(context);
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => const AdminLoginPage(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(-1.0, 0.0),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
+  String? _validateName(String? value) {
+    if (value == null || value.trim().isEmpty) {
+      return 'Please enter your name';
+    }
+    if (value.trim().length < 2) {
+      return 'Name must be at least 2 characters';
+    }
+    return null;
   }
 
   String? _validateEmail(String? value) {
@@ -119,9 +207,6 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
     if (value.length < 6) {
       return 'Password must be at least 6 characters';
     }
-    if (!RegExp(r'^(?=.*[a-zA-Z])(?=.*\d)').hasMatch(value)) {
-      return 'Password must contain at least one letter and one number';
-    }
     return null;
   }
 
@@ -135,61 +220,6 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
     return null;
   }
 
-  Widget _buildPasswordStrengthIndicator(String password) {
-    int strength = 0;
-    if (password.length >= 6) strength++;
-    if (password.contains(RegExp(r'[A-Z]'))) strength++;
-    if (password.contains(RegExp(r'[0-9]'))) strength++;
-    if (password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) strength++;
-
-    Color strengthColor = strength == 0
-        ? Colors.grey
-        : strength <= 1
-        ? Colors.red
-        : strength <= 2
-        ? Colors.orange
-        : strength <= 3
-        ? Colors.yellow[700]!
-        : Colors.green;
-
-    String strengthText = strength == 0
-        ? 'Very Weak'
-        : strength <= 1
-        ? 'Weak'
-        : strength <= 2
-        ? 'Fair'
-        : strength <= 3
-        ? 'Good'
-        : 'Strong';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: LinearProgressIndicator(
-                value: strength / 4,
-                backgroundColor: Colors.grey[300],
-                valueColor: AlwaysStoppedAnimation<Color>(strengthColor),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              strengthText,
-              style: TextStyle(
-                fontSize: 12,
-                color: strengthColor,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -197,12 +227,9 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios),
-          onPressed: _goToLogin,
-        ),
+        title: const Text('Temporary Admin Registration'),
+        backgroundColor: Colors.orange,
+        foregroundColor: Colors.white,
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -227,11 +254,11 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                     position: _slideAnimation,
                     child: Container(
                       constraints: BoxConstraints(
-                        maxWidth: size.width > 600 ? 400 : size.width * 0.9,
+                        maxWidth: size.width > 600 ? 500 : size.width * 0.9,
                       ),
                       child: Card(
                         elevation: 12,
-                        shadowColor: theme.colorScheme.primary.withOpacity(0.3),
+                        shadowColor: Colors.orange.withOpacity(0.3),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(20),
                         ),
@@ -243,23 +270,54 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
+                                // Warning banner
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.warning_amber_rounded,
+                                        color: Colors.orange[700],
+                                        size: 20,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'TEMPORARY: This registration will be removed later',
+                                          style: TextStyle(
+                                            color: Colors.orange[700],
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+
                                 Container(
                                   width: 80,
                                   height: 80,
                                   margin: const EdgeInsets.only(bottom: 24),
                                   decoration: BoxDecoration(
-                                    color: theme.colorScheme.primary.withOpacity(0.1),
+                                    color: Colors.orange.withOpacity(0.1),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: Icon(
-                                    Icons.person_add_outlined,
+                                  child: const Icon(
+                                    Icons.admin_panel_settings_rounded,
                                     size: 40,
-                                    color: theme.colorScheme.primary,
+                                    color: Colors.orange,
                                   ),
                                 ),
 
                                 Text(
-                                  "Create Account",
+                                  "Register Admin Account",
                                   style: theme.textTheme.headlineMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                     color: theme.colorScheme.onSurface,
@@ -268,7 +326,7 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                 ),
                                 const SizedBox(height: 8),
                                 Text(
-                                  "Join AI Laundry as an admin",
+                                  "Create a new manager/admin account",
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -277,12 +335,28 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                 const SizedBox(height: 32),
 
                                 TextFormField(
+                                  controller: _nameController,
+                                  validator: _validateName,
+                                  textInputAction: TextInputAction.next,
+                                  decoration: InputDecoration(
+                                    labelText: "Full Name *",
+                                    prefixIcon: const Icon(Icons.person_outlined),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    filled: true,
+                                    fillColor: theme.colorScheme.surface,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                TextFormField(
                                   controller: _emailController,
                                   validator: _validateEmail,
                                   keyboardType: TextInputType.emailAddress,
                                   textInputAction: TextInputAction.next,
                                   decoration: InputDecoration(
-                                    labelText: "Email Address",
+                                    labelText: "Email Address *",
                                     prefixIcon: const Icon(Icons.email_outlined),
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
@@ -294,13 +368,53 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                 const SizedBox(height: 16),
 
                                 TextFormField(
+                                  controller: _phoneController,
+                                  keyboardType: TextInputType.phone,
+                                  textInputAction: TextInputAction.next,
+                                  decoration: InputDecoration(
+                                    labelText: "Phone (Optional)",
+                                    prefixIcon: const Icon(Icons.phone_outlined),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    filled: true,
+                                    fillColor: theme.colorScheme.surface,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+
+                                DropdownButtonFormField<String>(
+                                  value: _selectedRole,
+                                  decoration: InputDecoration(
+                                    labelText: "Role *",
+                                    prefixIcon: const Icon(Icons.work_outline),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    filled: true,
+                                    fillColor: theme.colorScheme.surface,
+                                  ),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 'admin',
+                                      child: Text('Admin (Manager)'),
+                                    ),
+                                  ],
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      setState(() => _selectedRole = value);
+                                    }
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+
+                                TextFormField(
                                   controller: _passwordController,
                                   validator: _validatePassword,
                                   obscureText: _obscurePassword,
                                   textInputAction: TextInputAction.next,
-                                  onChanged: (value) => setState(() {}),
                                   decoration: InputDecoration(
-                                    labelText: "Password",
+                                    labelText: "Password *",
                                     prefixIcon: const Icon(Icons.lock_outlined),
                                     suffixIcon: IconButton(
                                       icon: Icon(
@@ -321,10 +435,6 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                     fillColor: theme.colorScheme.surface,
                                   ),
                                 ),
-
-                                if (_passwordController.text.isNotEmpty)
-                                  _buildPasswordStrengthIndicator(_passwordController.text),
-
                                 const SizedBox(height: 16),
 
                                 TextFormField(
@@ -334,7 +444,7 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                   textInputAction: TextInputAction.done,
                                   onFieldSubmitted: (_) => _register(),
                                   decoration: InputDecoration(
-                                    labelText: "Confirm Password",
+                                    labelText: "Confirm Password *",
                                     prefixIcon: const Icon(Icons.lock_outline_rounded),
                                     suffixIcon: IconButton(
                                       icon: Icon(
@@ -424,8 +534,8 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                   child: ElevatedButton(
                                     onPressed: _loading ? null : _register,
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: theme.colorScheme.primary,
-                                      foregroundColor: theme.colorScheme.onPrimary,
+                                      backgroundColor: Colors.orange,
+                                      foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -433,22 +543,22 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
                                     ),
                                     child: _loading
                                         ? SizedBox(
-                                      height: 20,
-                                      width: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation<Color>(
-                                          theme.colorScheme.onPrimary,
-                                        ),
-                                      ),
-                                    )
+                                            height: 20,
+                                            width: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                                Colors.white,
+                                              ),
+                                            ),
+                                          )
                                         : const Text(
-                                      "Create Account",
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                            "Create Admin Account",
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                   ),
                                 ),
 
@@ -490,3 +600,4 @@ class _RegisterPageState extends State<RegisterPage> with TickerProviderStateMix
     );
   }
 }
+

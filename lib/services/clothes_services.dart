@@ -6,10 +6,14 @@ class ClothesService {
 
   ClothesService(this.client);
 
-  Future<List<ClothesItem>> fetchClothes({int limit = 100}) async {
+  Future<List<ClothesItem>> fetchClothes({
+    int limit = 100,
+    bool ascending = true,
+  }) async {
     final response = await client
         .from('clothes')
-        .select('id, brand, color, type, image_url, created_at')
+        .select('id, brand, color, type, image_url, created_at, status, washer_id, checker_id')
+        .order('created_at', ascending: ascending)
         .limit(limit);
 
     return List<Map<String, dynamic>>.from(response)
