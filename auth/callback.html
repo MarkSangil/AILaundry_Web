@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set Your Password - Laundry App</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            max-width: 450px;
+            width: 100%;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .icon {
+            width: 80px;
+            height: 80px;
+            background: #667eea;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+        }
+        .icon svg {
+            width: 40px;
+            height: 40px;
+            color: white;
+        }
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 32px;
+            text-align: center;
+            line-height: 1.5;
+        }
+        .instructions {
+            background: #f0f4ff;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            border-left: 4px solid #667eea;
+        }
+        .instructions h3 {
+            color: #667eea;
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        .instructions ol {
+            margin-left: 20px;
+            color: #555;
+            line-height: 1.8;
+        }
+        .info-box {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }
+        .info-box strong {
+            color: #856404;
+            display: block;
+            margin-bottom: 8px;
+        }
+        .info-box p {
+            color: #856404;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .button {
+            background: #667eea;
+            color: white;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 12px;
+            transition: background 0.3s;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
+        .button.secondary {
+            background: #4caf50;
+        }
+        .button.secondary:hover {
+            background: #45a049;
+        }
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+            font-size: 14px;
+        }
+        .success {
+            background: #efe;
+            color: #3c3;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 16px;
+            font-size: 14px;
+        }
+        @media (max-width: 480px) {
+            .container {
+                padding: 24px;
+            }
+            h1 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+            </svg>
+        </div>
+        
+        <h1>Welcome!</h1>
+        <p class="subtitle">You've been invited to join our laundry management system.</p>
+        
+        <div class="instructions">
+            <h3>📱 To Set Your Password:</h3>
+            <ol>
+                <li>Open the <strong>Laundry App</strong> on your mobile device</li>
+                <li>Go to <strong>"Set Password"</strong> or <strong>"Accept Invitation"</strong></li>
+                <li>Enter your email address</li>
+                <li>Enter the <strong>6-digit verification code</strong> from your email</li>
+                <li>Set your password</li>
+            </ol>
+        </div>
+
+        <div class="info-box">
+            <strong>📧 Check Your Email</strong>
+            <p>You should have received an email with a 6-digit verification code. Use that code in the mobile app to set your password.</p>
+        </div>
+
+        <button class="button" onclick="openMobileApp()">
+            📱 Open Mobile App
+        </button>
+        <button class="button secondary" onclick="copyInstructions()">
+            📋 Copy Instructions
+        </button>
+        
+        <div id="message"></div>
+    </div>
+
+    <script>
+        // Extract parameters from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenHash = urlParams.get('token_hash');
+        const type = urlParams.get('type');
+        const email = urlParams.get('email');
+
+        function showMessage(text, isError = false) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = isError ? 'error' : 'success';
+            messageDiv.textContent = text;
+            setTimeout(() => {
+                messageDiv.textContent = '';
+                messageDiv.className = '';
+            }, 5000);
+        }
+
+        function openMobileApp() {
+            // Try to open mobile app with deep link
+            // Format: yourapp://auth/callback?token_hash=xxx&type=invite&email=xxx
+            const deepLink = `yourapp://auth/callback${tokenHash ? '?token_hash=' + encodeURIComponent(tokenHash) : ''}${type ? '&type=' + encodeURIComponent(type) : ''}${email ? '&email=' + encodeURIComponent(email) : ''}`;
+            
+            // Try opening app
+            window.location.href = deepLink;
+            
+            // Show message
+            showMessage('Attempting to open mobile app... If it doesn\'t open, please open the app manually.', false);
+            
+            // Fallback message after delay
+            setTimeout(() => {
+                showMessage('If the app didn\'t open, please open it manually and enter the verification code from your email.', false);
+            }, 2000);
+        }
+
+        function copyInstructions() {
+            const instructions = `To set your password in the Laundry App:
+
+1. Open the Laundry App on your mobile device
+2. Go to "Set Password" or "Accept Invitation"
+3. Enter your email address${email ? ': ' + email : ''}
+4. Enter the 6-digit verification code from your email
+5. Set your password
+
+The verification code was sent to your email. It expires in 1 hour.
+
+If you don't have the mobile app, contact your administrator.`;
+
+            navigator.clipboard.writeText(instructions).then(() => {
+                showMessage('Instructions copied to clipboard!', false);
+            }).catch(() => {
+                showMessage('Failed to copy. Please copy manually.', true);
+            });
+        }
+
+        // Auto-detect if on mobile device
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        
+        if (isMobile && tokenHash) {
+            // On mobile device with token hash - try to open app automatically
+            setTimeout(() => {
+                openMobileApp();
+            }, 1000);
+        }
+    </script>
+</body>
+</html>
+
