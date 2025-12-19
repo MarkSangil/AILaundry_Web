@@ -167,7 +167,7 @@ class _LoginPageState extends State<LoginPage> with TickerProviderStateMixin {
                               children: [
                                 _buildDisputeCard(theme, size),
                                 const SizedBox(height: 24),
-                                _buildAdminLoginCard(theme, size),
+                          _buildAdminLoginCard(theme, size),
                               ],
                             ),
                               ],

@@ -46,13 +46,13 @@ class DisputeService {
             disputeMap['item_id'] = disputeMap['item_id'] as String;
           }
           
-          final response = await client
-              .from('disputes')
+    final response = await client
+        .from('disputes')
               .insert(disputeMap)
-              .select()
-              .single();
-          
-          return Dispute.fromMap(response);
+        .select()
+        .single();
+
+    return Dispute.fromMap(response);
         } catch (insertError) {
           // If direct insert also fails (likely RLS), provide helpful error
           throw Exception(

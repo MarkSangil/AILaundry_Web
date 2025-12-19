@@ -64,9 +64,9 @@ class _DisputeFormPageState extends State<DisputeFormPage> {
       _selectedType = 'missing';
 
       // Show success modal
-      if (mounted) {
+        if (mounted) {
         _showSuccessModal(context);
-      }
+        }
     } catch (e) {
       setState(() {
         _error = 'Error submitting dispute: ${e.toString()}';

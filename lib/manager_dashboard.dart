@@ -1046,8 +1046,8 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    children: [
-                      Text('Type: ${dispute.type}'),
+                children: [
+                  Text('Type: ${dispute.type}'),
                       if (dispute.customerId == null) ...[
                         const SizedBox(width: 12),
                         Container(
