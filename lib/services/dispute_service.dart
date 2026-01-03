@@ -116,17 +116,106 @@ class DisputeService {
         .eq('id', disputedItemId)
         .single();
 
-    final item = itemResponse;
+    final disputedItem = itemResponse;
+    final disputedType = (disputedItem['type'] as String? ?? '').toLowerCase().trim();
+    final disputedBrand = (disputedItem['brand'] as String? ?? '').toLowerCase().trim();
+    final disputedColor = (disputedItem['color'] as String? ?? '').toLowerCase().trim();
     
-    // Find similar items by type, brand, or color
-    final similarResponse = await client
+    // If no attributes to match, return empty
+    if (disputedType.isEmpty && disputedBrand.isEmpty && disputedColor.isEmpty) {
+      return [];
+    }
+    
+    // Fetch all items except the disputed one
+    final allItemsResponse = await client
         .from('clothes')
         .select()
-        .or('type.eq.${item['type']},brand.eq.${item['brand']},color.eq.${item['color']}')
         .neq('id', disputedItemId)
-        .limit(10);
-
-    return List<Map<String, dynamic>>.from(similarResponse);
+        .limit(100); // Get more items to score and rank
+    
+    final allItems = List<Map<String, dynamic>>.from(allItemsResponse);
+    
+    // Score and rank items based on similarity
+    final scoredItems = allItems.map((item) {
+      int score = 0;
+      final itemType = (item['type'] as String? ?? '').toLowerCase().trim();
+      final itemBrand = (item['brand'] as String? ?? '').toLowerCase().trim();
+      final itemColor = (item['color'] as String? ?? '').toLowerCase().trim();
+      
+      // Exact matches get higher scores
+      // Brand + Color match (most important) = 100 points
+      if (disputedBrand.isNotEmpty && disputedColor.isNotEmpty) {
+        if (itemBrand == disputedBrand && itemColor == disputedColor) {
+          score += 100;
+        }
+      }
+      
+      // Brand + Type match = 80 points
+      if (disputedBrand.isNotEmpty && disputedType.isNotEmpty) {
+        if (itemBrand == disputedBrand && itemType == disputedType) {
+          score += 80;
+        }
+      }
+      
+      // Color + Type match = 60 points
+      if (disputedColor.isNotEmpty && disputedType.isNotEmpty) {
+        if (itemColor == disputedColor && itemType == disputedType) {
+          score += 60;
+        }
+      }
+      
+      // Single attribute matches (lower priority)
+      if (disputedBrand.isNotEmpty && itemBrand == disputedBrand) {
+        score += 30; // Brand match
+      }
+      if (disputedColor.isNotEmpty && itemColor == disputedColor) {
+        score += 20; // Color match
+      }
+      if (disputedType.isNotEmpty && itemType == disputedType) {
+        score += 10; // Type match (least specific)
+      }
+      
+      // Partial matches (fuzzy matching for brand/color)
+      if (disputedBrand.isNotEmpty && itemBrand.isNotEmpty) {
+        if (itemBrand.contains(disputedBrand) || disputedBrand.contains(itemBrand)) {
+          if (score < 30) score += 15; // Partial brand match
+        }
+      }
+      
+      return {
+        'item': item,
+        'score': score,
+      };
+    }).toList();
+    
+    // Sort by score (highest first) and filter out items with score 0
+    scoredItems.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+    
+    // Return top 6 items with score > 0, or at least top 3 even if score is low
+    final topItems = scoredItems
+        .where((scored) => scored['score'] as int > 0)
+        .take(6)
+        .map((scored) => scored['item'] as Map<String, dynamic>)
+        .toList();
+    
+    // If we have very few high-scoring items, include some lower-scoring ones
+    if (topItems.length < 3 && scoredItems.isNotEmpty) {
+      final additionalItems = scoredItems
+          .take(3)
+          .map((scored) => scored['item'] as Map<String, dynamic>)
+          .toList();
+      topItems.addAll(additionalItems);
+      // Remove duplicates
+      final seenIds = <String>{};
+      return topItems.where((item) {
+        final id = item['id'] as String?;
+        if (id == null || seenIds.contains(id)) return false;
+        seenIds.add(id);
+        return true;
+      }).toList();
+    }
+    
+    return topItems;
   }
 }
 

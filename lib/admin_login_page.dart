@@ -4,6 +4,7 @@ import 'package:ailaundry_web/admin_register_page.dart';
 import 'package:ailaundry_web/complete_profile_page.dart';
 import 'package:ailaundry_web/manager_dashboard.dart';
 import 'package:ailaundry_web/services/login_history_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -66,12 +67,16 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
 
       final user = response.user;
       if (user == null) {
-        setState(() => _error = "Invalid login credentials");
+        if (mounted) {
+          setState(() => _error = "Invalid login credentials. Please check your email and password.");
+        }
         return;
       }
 
       if (user.emailConfirmedAt == null) {
-        setState(() => _error = "Please confirm your email before logging in.");
+        if (mounted) {
+          setState(() => _error = "Please confirm your email before logging in.");
+        }
         return;
       }
 
@@ -95,16 +100,22 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
 
         if (userRecord == null) {
           // User exists in auth but not in laundry_users
-          // Only allow admin/manager registration through the registration page
-          setState(() => _error = "Access denied. Admin/Manager account required. Please register as admin first.");
-          await Supabase.instance.client.auth.signOut();
+          // Only allow admin registration through the registration page
+          if (mounted) {
+            setState(() => _error = "Access denied. Admin account required. Please register as admin first.");
+          }
+          // DO NOT sign out - just show error and let user try again or navigate away
+          // The session will remain but they can't access the dashboard
           return;
         }
 
         final userRole = userRecord['role'] as String;
-        if (userRole != 'admin' && userRole != 'manager') {
-          setState(() => _error = "Access denied. Admin/Manager role required.");
-          await Supabase.instance.client.auth.signOut();
+        if (userRole != 'admin') {
+          if (mounted) {
+            setState(() => _error = "Access denied. Admin role required. Your account role is: ${userRole.toUpperCase()}. Only administrators can access this page.");
+          }
+          // DO NOT sign out - just show error and let user try again
+          // The session will remain but they can't access the dashboard
           return;
         }
 
@@ -125,8 +136,22 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
           print('Failed to log login activity: $e');
         }
       } catch (e) {
-        setState(() => _error = "Error verifying user role: ${e.toString()}");
-        await Supabase.instance.client.auth.signOut();
+        if (mounted) {
+          // Show user-friendly error without signing out
+          String errorMessage = "Error verifying user role. Please try again.";
+          final errorString = e.toString().toLowerCase();
+          
+          if (errorString.contains('network') || errorString.contains('connection')) {
+            errorMessage = "Network error while verifying your account. Please check your connection and try again.";
+          } else if (errorString.contains('permission') || errorString.contains('rls')) {
+            errorMessage = "Permission error. Please contact an administrator.";
+          } else {
+            debugPrint('Role verification error: $e');
+          }
+          
+          setState(() => _error = errorMessage);
+        }
+        // DO NOT sign out on role verification errors - just show the error
         return;
       }
 
@@ -140,11 +165,44 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
             },
           ),
         );
+        // Return early after navigation to avoid executing finally block
+        return;
       }
     } catch (e) {
-      setState(() => _error = e.toString());
+      // Handle authentication errors with user-friendly messages
+      if (mounted) {
+        String errorMessage = "An error occurred during login. Please try again.";
+        
+        // Extract user-friendly error message from Supabase exceptions
+        final errorString = e.toString().toLowerCase();
+        
+        if (errorString.contains('invalid login credentials') || 
+            errorString.contains('invalid_credentials') ||
+            errorString.contains('email not confirmed') ||
+            errorString.contains('wrong password') ||
+            errorString.contains('user not found')) {
+          errorMessage = "Invalid email or password. Please check your credentials and try again.";
+        } else if (errorString.contains('email not confirmed') || 
+                   errorString.contains('email_not_confirmed')) {
+          errorMessage = "Please confirm your email address before logging in.";
+        } else if (errorString.contains('too many requests') || 
+                   errorString.contains('rate limit')) {
+          errorMessage = "Too many login attempts. Please wait a moment and try again.";
+        } else if (errorString.contains('network') || 
+                   errorString.contains('connection')) {
+          errorMessage = "Network error. Please check your connection and try again.";
+        } else {
+          // For other errors, show a generic message but log the actual error
+          debugPrint('Login error: $e');
+          errorMessage = "Login failed. Please check your credentials and try again.";
+        }
+        
+        setState(() => _error = errorMessage);
+      }
     } finally {
-      setState(() => _loading = false);
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
