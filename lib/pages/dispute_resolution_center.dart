@@ -1382,9 +1382,12 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
                                 ),
                               ),
                             ),
-                          ),
-                          // Match button
-                          Container(
+                          ],
+                        ),
+                      ),
+                    ),
+                    // Match button
+                    Container(
                             width: double.infinity,
                             decoration: BoxDecoration(
                               color: isMatched 
