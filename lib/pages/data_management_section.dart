@@ -1,10 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/clothes_item.dart';
 import '../models/washer.dart';
+import '../models/status_history.dart';
 import '../services/clothes_services.dart';
 import '../services/customer_service.dart';
 import '../services/washer_service.dart';
+import '../services/status_history_service.dart';
 import '../utils/error_utils.dart';
 // Data Management Section
 class DataManagementSection extends StatefulWidget {
@@ -63,10 +66,15 @@ class ItemsManagementTab extends StatefulWidget {
   State<ItemsManagementTab> createState() => _ItemsManagementTabState();
 }
 
-class _ItemsManagementTabState extends State<ItemsManagementTab> {
+class _ItemsManagementTabState extends State<ItemsManagementTab> with SingleTickerProviderStateMixin {
+  final supabase = Supabase.instance.client;
   final ClothesService _clothesService = ClothesService(Supabase.instance.client);
   final WasherService _washerService = WasherService(Supabase.instance.client);
+  final StatusHistoryService _statusHistoryService = StatusHistoryService(Supabase.instance.client);
+  late TabController _archiveTabController;
+  
   List<ClothesItem> _allItems = []; // All items from database
+  List<ClothesItem> _allArchivedItems = []; // All archived items from database
   List<ClothesItem> _filteredItems = []; // Items after filtering
   List<ClothesItem> _displayedItems = []; // Items for current page
   List<Washer> _washers = [];
@@ -75,6 +83,11 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
   bool _sortAscending = false; // Default to descending (newest first)
   int _currentPage = 1;
   static const int _itemsPerPage = 5;
+  bool _showArchived = false; // Track which tab is active
+  
+  // Bulk editing
+  Set<String> _selectedItemIds = {}; // Selected item IDs for bulk operations
+  bool _isSelectionMode = false; // Whether selection mode is active
   
   // Filter values
   String? _selectedColor;
@@ -85,7 +98,23 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
   @override
   void initState() {
     super.initState();
+    _archiveTabController = TabController(length: 2, vsync: this);
+    _archiveTabController.addListener(() {
+      if (_archiveTabController.indexIsChanging) {
+        setState(() {
+          _showArchived = _archiveTabController.index == 1;
+          _currentPage = 1;
+          _applyFilters();
+        });
+      }
+    });
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _archiveTabController.dispose();
+    super.dispose();
   }
   
   Future<void> _loadData() async {
@@ -103,15 +132,25 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
       });
     }
     try {
-      final items = await _clothesService.fetchClothes(
+      // Load both active and archived items
+      final activeItems = await _clothesService.fetchClothes(
         limit: 1000,
         ascending: _sortAscending,
+        includeArchived: false,
+      );
+      final archivedItems = await _clothesService.fetchClothes(
+        limit: 1000,
+        ascending: _sortAscending,
+        includeArchived: true,
       );
       if (mounted) {
         setState(() {
-          _allItems = items;
-          _applyFilters();
+          _allItems = activeItems;
+          _allArchivedItems = archivedItems;
+          _isLoading = false;
         });
+        // Apply filters after state is updated
+        _applyFilters();
       }
     } catch (e) {
       if (mounted) {
@@ -145,7 +184,9 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
   }
   
   void _applyFilters() {
-    var filtered = List<ClothesItem>.from(_allItems);
+    // Use the appropriate list based on active/archived tab
+    var sourceList = _showArchived ? _allArchivedItems : _allItems;
+    var filtered = List<ClothesItem>.from(sourceList);
     
     // Filter by color
     if (_selectedColor != null && _selectedColor!.isNotEmpty) {
@@ -176,28 +217,31 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
   }
   
   List<String> get _uniqueColors {
-    return _allItems.map((item) => item.color).where((color) => color.isNotEmpty).toSet().toList()..sort();
+    final sourceList = _showArchived ? _allArchivedItems : _allItems;
+    return sourceList.map((item) => item.color).where((color) => color.isNotEmpty).toSet().toList()..sort();
   }
   
   List<String> get _uniqueBrands {
-    return _allItems.map((item) => item.brand).where((brand) => brand.isNotEmpty).toSet().toList()..sort();
+    final sourceList = _showArchived ? _allArchivedItems : _allItems;
+    return sourceList.map((item) => item.brand).where((brand) => brand.isNotEmpty).toSet().toList()..sort();
   }
   
   List<String> get _uniqueTypes {
-    return _allItems.map((item) => item.type).where((type) => type.isNotEmpty).toSet().toList()..sort();
+    final sourceList = _showArchived ? _allArchivedItems : _allItems;
+    return sourceList.map((item) => item.type).where((type) => type.isNotEmpty).toSet().toList()..sort();
   }
 
   void _updateDisplayedItems() {
     if (_filteredItems.isEmpty) {
       _displayedItems = [];
-      return;
+    } else {
+      final startIndex = (_currentPage - 1) * _itemsPerPage;
+      final endIndex = startIndex + _itemsPerPage;
+      _displayedItems = _filteredItems.sublist(
+        startIndex,
+        endIndex > _filteredItems.length ? _filteredItems.length : endIndex,
+      );
     }
-    final startIndex = (_currentPage - 1) * _itemsPerPage;
-    final endIndex = startIndex + _itemsPerPage;
-    _displayedItems = _filteredItems.sublist(
-      startIndex,
-      endIndex > _filteredItems.length ? _filteredItems.length : endIndex,
-    );
   }
 
   int get _totalPages => _filteredItems.isEmpty ? 1 : (_filteredItems.length / _itemsPerPage).ceil();
@@ -234,13 +278,879 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
       case 'approved':
         return Colors.green;
       case 'pending':
+      case 'pending_check':
         return Colors.orange;
       case 'voided':
       case 'returned':
         return Colors.red;
+      case 'archived':
+      case 'deleted':
+        return Colors.orange.shade700; // Different shade for archived items
       default:
         return Colors.grey;
     }
+  }
+
+  Future<void> _archiveItem(String itemId) async {
+    try {
+      await _clothesService.updateItem(itemId, {'status': 'archived'});
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Item archived successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        await _loadItems();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error archiving item: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _unarchiveItem(String itemId) async {
+    await _restoreItem(itemId);
+  }
+
+  Future<void> _restoreItem(String itemId) async {
+    try {
+      // Get current user for audit trail
+      final currentUser = supabase.auth.currentUser;
+      final userId = currentUser?.id;
+      
+      // Check if this is the last archived item
+      final wasLastArchivedItem = _showArchived && _allArchivedItems.length == 1;
+      
+      // Restore the item
+      await _clothesService.restoreItem(itemId);
+      
+      // Log to audit trail (if audit table exists)
+      if (userId != null) {
+        try {
+          // Try to insert audit log - silently fail if table doesn't exist
+          await supabase.from('item_audit_log').insert({
+            'item_id': itemId,
+            'action': 'restore',
+            'user_id': userId,
+            'metadata': {
+              'restored_at': DateTime.now().toIso8601String(),
+              'restored_by': userId,
+            },
+            'created_at': DateTime.now().toIso8601String(),
+          }).catchError((e) {
+          });
+        } catch (e) {
+        }
+      }
+      
+      if (mounted) {
+        // Reload items to get updated lists
+        await _loadItems();
+        
+        // If this was the last archived item and we're on the archived tab,
+        // switch to the active tab to show the restored item
+        if (wasLastArchivedItem && _showArchived) {
+          // Wait a bit for state to update, then switch tabs
+          await Future.delayed(const Duration(milliseconds: 50));
+          if (mounted && _allArchivedItems.isEmpty) {
+            // Switch to Active tab
+            _archiveTabController.animateTo(0);
+            // Update state to reflect tab change and refresh display
+            setState(() {
+              _showArchived = false;
+              _currentPage = 1;
+            });
+            // Re-apply filters for active items
+            _applyFilters();
+          }
+        }
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Item restored successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error restoring item: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showEditItemDialog(ClothesItem item) async {
+    final typeController = TextEditingController(text: item.type);
+    final brandController = TextEditingController(text: item.brand);
+    final colorController = TextEditingController(text: item.color);
+    
+    // Get all valid status options
+    final validStatuses = [
+      null,
+      'approved',
+      'pending',
+      'pending_check',
+      'voided',
+      'returned',
+      'archived',
+      'deleted',
+    ];
+    
+    // Ensure selectedStatus is in the valid list, otherwise set to null
+    String? selectedStatus = validStatuses.contains(item.status) ? item.status : null;
+    String? selectedWasherId = item.washerId;
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Item'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: typeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Type',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: brandController,
+                  decoration: const InputDecoration(
+                    labelText: 'Brand',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: colorController,
+                  decoration: const InputDecoration(
+                    labelText: 'Color',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedStatus,
+                  decoration: const InputDecoration(
+                    labelText: 'Status',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: null, child: Text('No Status')),
+                    DropdownMenuItem(value: 'approved', child: Text('Approved')),
+                    DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'pending_check', child: Text('Pending Check')),
+                    DropdownMenuItem(value: 'voided', child: Text('Voided')),
+                    DropdownMenuItem(value: 'returned', child: Text('Returned')),
+                    DropdownMenuItem(value: 'archived', child: Text('Archived')),
+                    DropdownMenuItem(value: 'deleted', child: Text('Deleted')),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedStatus = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedWasherId,
+                  decoration: const InputDecoration(
+                    labelText: 'Washer (Optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('No Washer'),
+                    ),
+                    ..._washers.map((washer) => DropdownMenuItem<String>(
+                      value: washer.id,
+                      child: Text(washer.name),
+                    )),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedWasherId = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                try {
+                  // Build updates map - only include non-empty values
+                  final updates = <String, dynamic>{};
+                  
+                  final type = typeController.text.trim();
+                  final brand = brandController.text.trim();
+                  final color = colorController.text.trim();
+                  
+                  if (type.isNotEmpty) updates['type'] = type;
+                  if (brand.isNotEmpty) updates['brand'] = brand;
+                  if (color.isNotEmpty) updates['color'] = color;
+                  if (selectedStatus != null) updates['status'] = selectedStatus;
+                  if (selectedWasherId != null) updates['washer_id'] = selectedWasherId;
+
+                  if (updates.isEmpty) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('No changes to save'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+                  await _clothesService.updateItem(item.id, updates);
+                  
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Item updated successfully'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    await _loadItems();
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error updating item: ${safeErrorToString(e)}'),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 5),
+                      ),
+                    );
+                  }
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showStatusHistoryDialog(ClothesItem item) async {
+    // Show loading dialog first
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
+    );
+
+    try {
+      // Fetch status history
+      final history = await _statusHistoryService.getStatusHistory(item.id);
+
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      // Show history dialog
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('Status History: ${item.type} - ${item.brand}'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: history.isEmpty
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32.0),
+                        child: Text(
+                          'No status history found for this item.',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: history.length,
+                      itemBuilder: (context, index) {
+                        final entry = history[index];
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: _getStatusColor(entry.newStatus),
+                              child: const Icon(Icons.arrow_forward, color: Colors.white, size: 16),
+                            ),
+                            title: Row(
+                              children: [
+                                if (entry.oldStatus != null) ...[
+                                  Chip(
+                                    label: Text(
+                                      entry.oldStatus!.toUpperCase(),
+                                      style: const TextStyle(fontSize: 10),
+                                    ),
+                                    backgroundColor: Colors.grey.shade300,
+                                    padding: EdgeInsets.zero,
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.symmetric(horizontal: 4),
+                                    child: Icon(Icons.arrow_forward, size: 16),
+                                  ),
+                                ],
+                                Chip(
+                                  label: Text(
+                                    entry.newStatus.toUpperCase(),
+                                    style: const TextStyle(fontSize: 10, color: Colors.white),
+                                  ),
+                                  backgroundColor: _getStatusColor(entry.newStatus),
+                                  padding: EdgeInsets.zero,
+                                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                              ],
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (entry.createdAt != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _formatDateTime(entry.createdAt!),
+                                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                  ),
+                                ],
+                                if (entry.notes != null && entry.notes!.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Note: ${entry.notes}',
+                                    style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            isThreeLine: entry.notes != null && entry.notes!.isNotEmpty,
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      // Close loading dialog if still open
+      if (mounted) {
+        Navigator.pop(context);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading status history: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatDateTime(String dateTimeString) {
+    try {
+      final dateTime = DateTime.parse(dateTimeString);
+      return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')} '
+          '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+    } catch (e) {
+      return dateTimeString;
+    }
+  }
+
+  Future<void> _deleteItem(String itemId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Item Permanently'),
+        content: const Text(
+          'Are you sure you want to permanently delete this item? This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await _clothesService.deleteItem(itemId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Item deleted permanently'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        await _loadItems();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error deleting item: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Bulk editing methods
+  void _enterSelectionMode() {
+    setState(() {
+      _isSelectionMode = true;
+      _selectedItemIds.clear();
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _isSelectionMode = false;
+      _selectedItemIds.clear();
+    });
+  }
+
+  void _selectAllOnPage() {
+    setState(() {
+      for (var item in _displayedItems) {
+        _selectedItemIds.add(item.id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedItemIds.clear();
+    });
+  }
+
+  Future<void> _bulkArchive() async {
+    if (_selectedItemIds.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Archive Items'),
+        content: Text('Are you sure you want to archive ${_selectedItemIds.length} item(s)?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Archive'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      int successCount = 0;
+      int failCount = 0;
+
+      for (var itemId in _selectedItemIds) {
+        try {
+          // Use updateItem directly to ensure status is updated
+          await _clothesService.updateItem(itemId, {'status': 'archived'});
+          successCount++;
+        } catch (e) {
+          failCount++;
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              failCount > 0
+                  ? 'Archived $successCount item(s). $failCount failed.'
+                  : 'Successfully archived $successCount item(s).',
+            ),
+            backgroundColor: failCount > 0 ? Colors.orange : Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        _exitSelectionMode();
+        await _loadItems();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error during bulk archive: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _bulkRestore() async {
+    if (_selectedItemIds.isEmpty) return;
+
+    // One-click bulk restore - no confirmation needed for restore
+    try {
+      final currentUser = supabase.auth.currentUser;
+      final userId = currentUser?.id;
+      
+      int successCount = 0;
+      int failCount = 0;
+
+      for (var itemId in _selectedItemIds) {
+        try {
+          await _clothesService.restoreItem(itemId);
+          
+          // Log to audit trail
+          if (userId != null) {
+            try {
+              await supabase.from('item_audit_log').insert({
+                'item_id': itemId,
+                'action': 'restore',
+                'user_id': userId,
+                'metadata': {
+                  'restored_at': DateTime.now().toIso8601String(),
+                  'restored_by': userId,
+                  'bulk_operation': true,
+                },
+                'created_at': DateTime.now().toIso8601String(),
+              }).catchError((e) {
+              });
+            } catch (e) {
+            }
+          }
+          
+          successCount++;
+        } catch (e) {
+          failCount++;
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              failCount > 0
+                  ? 'Restored $successCount item(s). $failCount failed.'
+                  : 'Successfully restored $successCount item(s).',
+            ),
+            backgroundColor: failCount > 0 ? Colors.orange : Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        _exitSelectionMode();
+        await _loadItems();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error during bulk restore: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _bulkDelete() async {
+    if (_selectedItemIds.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Items Permanently'),
+        content: Text(
+          'Are you sure you want to permanently delete ${_selectedItemIds.length} item(s)?\n\n'
+          'This action cannot be undone. Items will be permanently removed from the database.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete Permanently'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      int successCount = 0;
+      int failCount = 0;
+
+      for (var itemId in _selectedItemIds) {
+        try {
+          await _clothesService.deleteItem(itemId);
+          successCount++;
+        } catch (e) {
+          failCount++;
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              failCount > 0
+                  ? 'Deleted $successCount item(s). $failCount failed.'
+                  : 'Successfully deleted $successCount item(s) permanently.',
+            ),
+            backgroundColor: failCount > 0 ? Colors.orange : Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        _exitSelectionMode();
+        await _loadItems();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error during bulk delete: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showBulkEditDialog() async {
+    if (_selectedItemIds.isEmpty) return;
+    final widgetContext = context;
+    
+    String? selectedStatus;
+    String? selectedWasherId;
+    await showDialog(
+      context: widgetContext,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Bulk Edit ${_selectedItemIds.length} Item(s)'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Update the following fields for all selected items. Leave unchanged to keep current values.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedStatus,
+                  decoration: const InputDecoration(
+                    labelText: 'Status (Optional)',
+                    border: OutlineInputBorder(),
+                    helperText: 'Leave unchanged to keep current status',
+                  ),
+                  items: const [
+                    DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('Keep Current Status'),
+                    ),
+                    DropdownMenuItem(value: 'approved', child: Text('Approved')),
+                    DropdownMenuItem(value: 'pending', child: Text('Pending')),
+                    DropdownMenuItem(value: 'pending_check', child: Text('Pending Check')),
+                    DropdownMenuItem(value: 'voided', child: Text('Voided')),
+                    DropdownMenuItem(value: 'returned', child: Text('Returned')),
+                    DropdownMenuItem(value: 'archived', child: Text('Archived')),
+                    DropdownMenuItem(value: 'deleted', child: Text('Deleted')),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedStatus = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: selectedWasherId,
+                  decoration: const InputDecoration(
+                    labelText: 'Washer (Optional)',
+                    border: OutlineInputBorder(),
+                    helperText: 'Leave unchanged to keep current washer',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('Keep Current Washer / No Washer'),
+                    ),
+                    ..._washers.map((washer) => DropdownMenuItem<String>(
+                      value: washer.id,
+                      child: Text(washer.name),
+                    )),
+                  ],
+                  onChanged: (value) {
+                    setDialogState(() {
+                      selectedWasherId = value;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                // Build updates map - only include fields that were changed
+                final updates = <String, dynamic>{};
+                if (selectedStatus != null) {
+                  updates['status'] = selectedStatus;
+                }
+                if (selectedWasherId != null) {
+                  updates['washer_id'] = selectedWasherId;
+                }
+
+                // If no changes, just close
+                if (updates.isEmpty) {
+                  Navigator.pop(context);
+                  if (mounted) {
+                    ScaffoldMessenger.of(widgetContext).showSnackBar(
+                      const SnackBar(
+                        content: Text('No changes to apply'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                  }
+                  return;
+                }
+
+                // Close the bulk edit dialog first
+                Navigator.pop(context);
+
+                // Show progress dialog using widget's context
+                if (!mounted) return;
+                showDialog(
+                  context: widgetContext,
+                  barrierDismissible: false,
+                  builder: (dialogContext) => WillPopScope(
+                    onWillPop: () async => false,
+                    child: AlertDialog(
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 16),
+                          Text('Updating ${_selectedItemIds.length} item(s)...'),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+
+                try {
+                  int successCount = 0;
+                  int failCount = 0;
+
+                  for (var itemId in _selectedItemIds) {
+                    try {
+                      await _clothesService.updateItem(itemId, updates);
+                      successCount++;
+                    } catch (e) {
+                      failCount++;
+                    }
+                  }
+
+                  if (mounted) {
+                    Navigator.of(widgetContext, rootNavigator: true).pop();
+                  }
+
+                  if (mounted) {
+                    ScaffoldMessenger.of(widgetContext).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          failCount > 0
+                              ? 'Updated $successCount item(s). $failCount failed.'
+                              : 'Successfully updated $successCount item(s).',
+                        ),
+                        backgroundColor: failCount > 0 ? Colors.orange : Colors.green,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                    _exitSelectionMode();
+                    await _loadItems();
+                  }
+                } catch (e) {
+                  // Close progress dialog using widget's context
+                  if (mounted) {
+                    Navigator.of(widgetContext, rootNavigator: true).pop();
+                  }
+                  if (mounted) {
+                    ScaffoldMessenger.of(widgetContext).showSnackBar(
+                      SnackBar(
+                        content: Text('Error during bulk edit: ${safeErrorToString(e)}'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+              child: const Text('Apply Changes'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -267,21 +1177,28 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
       );
     }
 
-    if (_allItems.isEmpty) {
-      return const Center(
+    final sourceList = _showArchived ? _allArchivedItems : _allItems;
+    if (sourceList.isEmpty) {
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey),
-            SizedBox(height: 16),
-            Text(
-              'No items found',
-              style: TextStyle(fontSize: 18, color: Colors.grey),
+            Icon(
+              _showArchived ? Icons.archive_outlined : Icons.inventory_2_outlined,
+              size: 64,
+              color: Colors.grey,
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 16),
             Text(
-              'Items will appear here once they are added to the system',
-              style: TextStyle(color: Colors.grey),
+              _showArchived ? 'No archived items found' : 'No items found',
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _showArchived
+                  ? 'Archived items will appear here'
+                  : 'Items will appear here once they are added to the system',
+              style: const TextStyle(color: Colors.grey),
             ),
           ],
         ),
@@ -290,6 +1207,20 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
 
     return Column(
       children: [
+        // Active/Archived Tab Bar
+        TabBar(
+          controller: _archiveTabController,
+          tabs: [
+            Tab(
+              icon: const Icon(Icons.inventory_2),
+              text: 'Active (${_allItems.length})',
+            ),
+            Tab(
+              icon: const Icon(Icons.archive),
+              text: 'Archived (${_allArchivedItems.length})',
+            ),
+          ],
+        ),
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -298,27 +1229,97 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Items (${_filteredItems.length}${_filteredItems.length != _allItems.length ? ' of ${_allItems.length}' : ''})',
+                    _isSelectionMode
+                        ? '${_selectedItemIds.length} selected'
+                        : '${_showArchived ? "Archived" : "Active"} Items (${_filteredItems.length}${_filteredItems.length != (_showArchived ? _allArchivedItems.length : _allItems.length) ? ' of ${_showArchived ? _allArchivedItems.length : _allItems.length}' : ''})',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   Row(
                     children: [
-                      // Sort order button
-                      Tooltip(
-                        message: _sortAscending ? 'Sort: Oldest First' : 'Sort: Newest First',
-                        child: IconButton(
-                          icon: Icon(
-                            _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
-                          ),
-                          onPressed: _toggleSortOrder,
-                          tooltip: _sortAscending ? 'Sort: Oldest First' : 'Sort: Newest First',
+                      if (_isSelectionMode) ...[
+                        // Bulk action buttons
+                        TextButton.icon(
+                          onPressed: _selectedItemIds.isEmpty ? null : _selectAllOnPage,
+                          icon: const Icon(Icons.select_all, size: 18),
+                          label: const Text('Select All'),
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.refresh),
-                        onPressed: _loadData,
-                        tooltip: 'Refresh',
-                      ),
+                        TextButton.icon(
+                          onPressed: _selectedItemIds.isEmpty ? null : _clearSelection,
+                          icon: const Icon(Icons.clear_all, size: 18),
+                          label: const Text('Clear'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _selectedItemIds.isEmpty ? null : _showBulkEditDialog,
+                          icon: const Icon(Icons.edit, size: 18),
+                          label: Text('Bulk Edit (${_selectedItemIds.length})'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (!_showArchived)
+                          ElevatedButton.icon(
+                            onPressed: _selectedItemIds.isEmpty ? null : _bulkArchive,
+                            icon: const Icon(Icons.archive, size: 18),
+                            label: Text('Archive (${_selectedItemIds.length})'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        if (_showArchived) ...[
+                          ElevatedButton.icon(
+                            onPressed: _selectedItemIds.isEmpty ? null : _bulkRestore,
+                            icon: const Icon(Icons.restore, size: 18),
+                            label: Text('Restore (${_selectedItemIds.length})'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            onPressed: _selectedItemIds.isEmpty ? null : _bulkDelete,
+                            icon: const Icon(Icons.delete_forever, size: 18),
+                            label: Text('Delete (${_selectedItemIds.length})'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: _exitSelectionMode,
+                          tooltip: 'Exit Selection',
+                        ),
+                      ] else ...[
+                        // Normal mode buttons
+                        IconButton(
+                          icon: const Icon(Icons.checklist),
+                          onPressed: _enterSelectionMode,
+                          tooltip: 'Bulk Edit',
+                        ),
+                        // Sort order button
+                        Tooltip(
+                          message: _sortAscending ? 'Sort: Oldest First' : 'Sort: Newest First',
+                          child: IconButton(
+                            icon: Icon(
+                              _sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+                            ),
+                            onPressed: _toggleSortOrder,
+                            tooltip: _sortAscending ? 'Sort: Oldest First' : 'Sort: Newest First',
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.refresh),
+                          onPressed: _loadData,
+                          tooltip: 'Refresh',
+                        ),
+                      ],
                     ],
                   ),
                 ],
@@ -357,127 +1358,150 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          // Color filter
-                          SizedBox(
-                            width: 150,
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedColor,
-                              decoration: const InputDecoration(
-                                labelText: 'Color',
-                                border: OutlineInputBorder(),
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                isDense: true,
-                              ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('All Colors'),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Calculate responsive widths based on available space
+                          final availableWidth = constraints.maxWidth;
+                          final isWideScreen = availableWidth > 800;
+                          final isMediumScreen = availableWidth > 600;
+                          
+                          // Use flexible widths that adapt to screen size
+                          final colorWidth = isWideScreen ? 140.0 : isMediumScreen ? 120.0 : double.infinity;
+                          final brandWidth = isWideScreen ? 140.0 : isMediumScreen ? 120.0 : double.infinity;
+                          final typeWidth = isWideScreen ? 140.0 : isMediumScreen ? 120.0 : double.infinity;
+                          final washerWidth = isWideScreen ? 180.0 : isMediumScreen ? 160.0 : double.infinity;
+                          
+                          return Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              // Color filter
+                              SizedBox(
+                                width: colorWidth == double.infinity ? null : colorWidth,
+                                child: DropdownButtonFormField<String>(
+                                  value: _selectedColor,
+                                  decoration: InputDecoration(
+                                    labelText: 'Color',
+                                    border: const OutlineInputBorder(),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    isDense: true,
+                                    isCollapsed: false,
+                                  ),
+                                  isExpanded: true,
+                                  items: [
+                                    const DropdownMenuItem<String>(
+                                      value: null,
+                                      child: Text('All Colors', overflow: TextOverflow.ellipsis),
+                                    ),
+                                    ..._uniqueColors.map((color) => DropdownMenuItem<String>(
+                                      value: color,
+                                      child: Text(color, overflow: TextOverflow.ellipsis),
+                                    )),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedColor = value;
+                                      _applyFilters();
+                                    });
+                                  },
                                 ),
-                                ..._uniqueColors.map((color) => DropdownMenuItem<String>(
-                                  value: color,
-                                  child: Text(color),
-                                )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _selectedColor = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
-                          ),
-                          // Brand filter
-                          SizedBox(
-                            width: 150,
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedBrand,
-                              decoration: const InputDecoration(
-                                labelText: 'Brand',
-                                border: OutlineInputBorder(),
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                isDense: true,
                               ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('All Brands'),
+                              // Brand filter
+                              SizedBox(
+                                width: brandWidth == double.infinity ? null : brandWidth,
+                                child: DropdownButtonFormField<String>(
+                                  value: _selectedBrand,
+                                  decoration: InputDecoration(
+                                    labelText: 'Brand',
+                                    border: const OutlineInputBorder(),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    isDense: true,
+                                    isCollapsed: false,
+                                  ),
+                                  isExpanded: true,
+                                  items: [
+                                    const DropdownMenuItem<String>(
+                                      value: null,
+                                      child: Text('All Brands', overflow: TextOverflow.ellipsis),
+                                    ),
+                                    ..._uniqueBrands.map((brand) => DropdownMenuItem<String>(
+                                      value: brand,
+                                      child: Text(brand, overflow: TextOverflow.ellipsis),
+                                    )),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedBrand = value;
+                                      _applyFilters();
+                                    });
+                                  },
                                 ),
-                                ..._uniqueBrands.map((brand) => DropdownMenuItem<String>(
-                                  value: brand,
-                                  child: Text(brand),
-                                )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _selectedBrand = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
-                          ),
-                          // Type filter
-                          SizedBox(
-                            width: 150,
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedType,
-                              decoration: const InputDecoration(
-                                labelText: 'Type',
-                                border: OutlineInputBorder(),
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                isDense: true,
                               ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('All Types'),
+                              // Type filter
+                              SizedBox(
+                                width: typeWidth == double.infinity ? null : typeWidth,
+                                child: DropdownButtonFormField<String>(
+                                  value: _selectedType,
+                                  decoration: InputDecoration(
+                                    labelText: 'Type',
+                                    border: const OutlineInputBorder(),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    isDense: true,
+                                    isCollapsed: false,
+                                  ),
+                                  isExpanded: true,
+                                  items: [
+                                    const DropdownMenuItem<String>(
+                                      value: null,
+                                      child: Text('All Types', overflow: TextOverflow.ellipsis),
+                                    ),
+                                    ..._uniqueTypes.map((type) => DropdownMenuItem<String>(
+                                      value: type,
+                                      child: Text(type, overflow: TextOverflow.ellipsis),
+                                    )),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedType = value;
+                                      _applyFilters();
+                                    });
+                                  },
                                 ),
-                                ..._uniqueTypes.map((type) => DropdownMenuItem<String>(
-                                  value: type,
-                                  child: Text(type),
-                                )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _selectedType = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
-                          ),
-                          // Washer filter
-                          SizedBox(
-                            width: 200,
-                            child: DropdownButtonFormField<String>(
-                              value: _selectedWasherId,
-                              decoration: const InputDecoration(
-                                labelText: 'Washer',
-                                border: OutlineInputBorder(),
-                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                isDense: true,
                               ),
-                              items: [
-                                const DropdownMenuItem<String>(
-                                  value: null,
-                                  child: Text('All Washers'),
+                              // Washer filter
+                              SizedBox(
+                                width: washerWidth == double.infinity ? null : washerWidth,
+                                child: DropdownButtonFormField<String>(
+                                  value: _selectedWasherId,
+                                  decoration: InputDecoration(
+                                    labelText: 'Washer',
+                                    border: const OutlineInputBorder(),
+                                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    isDense: true,
+                                    isCollapsed: false,
+                                  ),
+                                  isExpanded: true,
+                                  items: [
+                                    const DropdownMenuItem<String>(
+                                      value: null,
+                                      child: Text('All Washers', overflow: TextOverflow.ellipsis),
+                                    ),
+                                    ..._washers.map((washer) => DropdownMenuItem<String>(
+                                      value: washer.id,
+                                      child: Text(washer.name, overflow: TextOverflow.ellipsis),
+                                    )),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _selectedWasherId = value;
+                                      _applyFilters();
+                                    });
+                                  },
                                 ),
-                                ..._washers.map((washer) => DropdownMenuItem<String>(
-                                  value: washer.id,
-                                  child: Text(washer.name),
-                                )),
-                              ],
-                              onChanged: (value) {
-                                setState(() {
-                                  _selectedWasherId = value;
-                                  _applyFilters();
-                                });
-                              },
-                            ),
-                          ),
-                        ],
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -534,20 +1558,49 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
                   itemCount: _displayedItems.length,
                   itemBuilder: (context, index) {
                     final item = _displayedItems[index];
+                    final isArchived = item.status == 'archived' || 
+                                      item.status == 'voided' || 
+                                      item.status == 'deleted';
+                    final isSelected = _selectedItemIds.contains(item.id);
                     return Card(
                       margin: const EdgeInsets.only(bottom: 8),
+                      color: isSelected ? Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3) : null,
                       child: ListTile(
-                        leading: item.imageUrl != null
-                            ? Image.network(
-                                item.imageUrl!,
-                                width: 50,
-                                height: 50,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) =>
-                                    const Icon(Icons.image_not_supported),
+                        leading: _isSelectionMode
+                            ? Checkbox(
+                                value: isSelected,
+                                onChanged: (value) {
+                                  setState(() {
+                                    if (value == true) {
+                                      _selectedItemIds.add(item.id);
+                                    } else {
+                                      _selectedItemIds.remove(item.id);
+                                    }
+                                  });
+                                },
                               )
-                            : const Icon(Icons.inventory_2),
+                            : (item.imageUrl != null
+                                ? Image.network(
+                                    item.imageUrl!,
+                                    width: 50,
+                                    height: 50,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) =>
+                                        const Icon(Icons.image_not_supported),
+                                  )
+                                : const Icon(Icons.inventory_2)),
                         title: Text('${item.type} - ${item.brand}'),
+                        onTap: _isSelectionMode
+                            ? () {
+                                setState(() {
+                                  if (isSelected) {
+                                    _selectedItemIds.remove(item.id);
+                                  } else {
+                                    _selectedItemIds.add(item.id);
+                                  }
+                                });
+                              }
+                            : null,
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -566,19 +1619,108 @@ class _ItemsManagementTabState extends State<ItemsManagementTab> {
                             ],
                           ],
                         ),
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (item.createdAt != null)
-                              Text(
-                                DateTime.parse(item.createdAt!)
-                                    .toString()
-                                    .split(' ')[0],
-                                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        trailing: _isSelectionMode
+                            ? null
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (item.createdAt != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: Text(
+                                        DateTime.parse(item.createdAt!)
+                                            .toString()
+                                            .split(' ')[0],
+                                        style: const TextStyle(fontSize: 12, color: Colors.grey),
+                                      ),
+                                    ),
+                                  // One-click restore button for archived items
+                                  if (isArchived && !_isSelectionMode)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: IconButton(
+                                        icon: const Icon(Icons.restore, color: Colors.green),
+                                        onPressed: () => _restoreItem(item.id),
+                                        tooltip: 'Restore Item',
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: Colors.green.withOpacity(0.1),
+                                        ),
+                                      ),
+                                    ),
+                                  PopupMenuButton<String>(
+                                    onSelected: (value) async {
+                                      if (value == 'edit') {
+                                        await _showEditItemDialog(item);
+                                      } else if (value == 'history') {
+                                        await _showStatusHistoryDialog(item);
+                                      } else if (value == 'archive') {
+                                        await _archiveItem(item.id);
+                                      } else if (value == 'restore' || value == 'unarchive') {
+                                        await _restoreItem(item.id);
+                                      } else if (value == 'delete') {
+                                        await _deleteItem(item.id);
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      const PopupMenuItem(
+                                        value: 'edit',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.edit, size: 20, color: Colors.blue),
+                                            SizedBox(width: 8),
+                                            Text('Edit'),
+                                          ],
+                                        ),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: 'history',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.history, size: 20, color: Colors.purple),
+                                            SizedBox(width: 8),
+                                            Text('View History'),
+                                          ],
+                                        ),
+                                      ),
+                                      const PopupMenuDivider(),
+                                      if (isArchived) ...[
+                                        const PopupMenuItem(
+                                          value: 'restore',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.restore, size: 20, color: Colors.green),
+                                              SizedBox(width: 8),
+                                              Text('Restore'),
+                                            ],
+                                          ),
+                                        ),
+                                        const PopupMenuDivider(),
+                                        const PopupMenuItem(
+                                          value: 'delete',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.delete_forever, size: 20, color: Colors.red),
+                                              SizedBox(width: 8),
+                                              Text('Delete Permanently'),
+                                            ],
+                                          ),
+                                        ),
+                                      ] else ...[
+                                        const PopupMenuItem(
+                                          value: 'archive',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.archive, size: 20, color: Colors.orange),
+                                              SizedBox(width: 8),
+                                              Text('Archive'),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ],
                               ),
-                          ],
-                        ),
                       ),
                     );
                   },

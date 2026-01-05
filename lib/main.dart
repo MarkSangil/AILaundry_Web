@@ -26,13 +26,46 @@ String safeErrorToString(dynamic error) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Set up global error handler to prevent infinite loops
+  // Set up global error handler to prevent infinite loops from JavaScript objects
   FlutterError.onError = (FlutterErrorDetails details) {
-    // Safely log the error without causing another crash
-    debugPrint('Flutter Error: ${safeErrorToString(details.exception)}');
-    debugPrint('Stack: ${details.stack}');
-    // Don't let Flutter try to render the error widget if it contains JS objects
-    FlutterError.presentError(details);
+    // Safely convert the error to string to prevent LegacyJavaScriptObject crashes
+    final errorString = safeErrorToString(details.exception);
+    
+    // Check if this is a JavaScript object error that would cause infinite loops
+    final exceptionStr = details.exception?.toString() ?? '';
+    final isJsObjectError = errorString.contains('LegacyJavaScriptObject') || 
+                            errorString.contains('Instance of') ||
+                            exceptionStr.contains('LegacyJavaScriptObject') ||
+                            exceptionStr.contains('DiagnosticsNode');
+    
+    // NEVER present JS object errors - they cause infinite loops
+    if (isJsObjectError) {
+      // For JS object errors, just log safely without rendering to prevent infinite loops
+      debugPrint('Flutter Error (JS Object - suppressed): $errorString');
+      return; // Exit early - don't try to render
+    }
+    
+    // For non-JS errors, try to present them safely
+    try {
+      // Double-check the error details don't contain JS objects
+      final stackStr = safeErrorToString(details.stack);
+      if (stackStr.contains('LegacyJavaScriptObject') || stackStr.contains('DiagnosticsNode')) {
+        debugPrint('Flutter Error (JS Object in stack - suppressed): $errorString');
+        return;
+      }
+      
+      FlutterError.presentError(details);
+    } catch (e) {
+      // If presenting the error itself fails, just log it
+      debugPrint('Error presenting error: ${safeErrorToString(e)}');
+    }
+  };
+  
+  // Also catch platform errors (like JS interop issues)
+  PlatformDispatcher.instance.onError = (error, stack) {
+    final errorString = safeErrorToString(error);
+    debugPrint('Platform Error: $errorString');
+    return true; // Handled - prevent default error handling
   };
   
   try {
@@ -41,13 +74,8 @@ Future<void> main() async {
       anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhlYWJudmZ4bmtvb2xqYnFoa2NlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4NTE1NDAsImV4cCI6MjA2ODQyNzU0MH0.zyc3Cu108kLn_xed5iVeQ2TpZRTyX59RihHpI2O9RQg',
     );
   } catch (e) {
-    debugPrint('Supabase init failed: ${safeErrorToString(e)}');
-    // Continue anyway - might work on retry
   }
-  
-  // Store build timestamp to detect hot restart
-  const buildTimestamp = '2025-01-27-v2'; // Change this when you want to force refresh
-  
+  const buildTimestamp = '2025-01-27-v2'; 
   runApp(MyApp(buildTimestamp: buildTimestamp));
 }
 
@@ -121,56 +149,30 @@ class _MyAppState extends State<MyApp> {
           .maybeSingle();
 
       if (!mounted) return;
-
-      // Debug logging to identify role issues
-      debugPrint('=== Route Determination Debug ===');
-      debugPrint('User ID: ${session.user.id}');
-      debugPrint('User Email: ${session.user.email}');
-      debugPrint('User Record: $userRecord');
-      debugPrint('User Metadata: ${session.user.userMetadata}');
-
       if (userRecord != null) {
         final role = userRecord['role'] as String?;
-        debugPrint('User Role: $role');
         setState(() {
           if (role == 'admin') {
             _initialRoute = const ManagerDashboard();
           } else {
-            // Non-admin users are not allowed - just route to login
-            // DO NOT sign out - user is authenticated, just unauthorized for this app
-            debugPrint('User role "$role" is not admin - routing to login');
             _initialRoute = const LoginPage();
           }
           _isLoading = false;
         });
       } else {
-        // User exists in auth but not in laundry_users - route to login
-        // DO NOT sign out - this could be a race condition or RLS issue
-        debugPrint('User record not found in laundry_users - routing to login');
         setState(() {
           _initialRoute = const LoginPage();
           _isLoading = false;
         });
       }
     } catch (e) {
-      // On error, try to determine from session metadata or default
       if (!mounted) return;
-      
-      debugPrint('Error checking user role: ${safeErrorToString(e)}');
-      
-      // Check if user metadata has role info
       final userMetadata = session.user.userMetadata;
       final roleFromMetadata = userMetadata?['role'] as String?;
-      
-      debugPrint('Role from metadata: $roleFromMetadata');
-      
       setState(() {
         if (roleFromMetadata == 'admin') {
           _initialRoute = const ManagerDashboard();
         } else {
-          // Non-admin users are not allowed - just route to login
-          // DO NOT sign out - user is authenticated, just unauthorized
-          debugPrint('Role from metadata "$roleFromMetadata" is not admin - routing to login');
           _initialRoute = const LoginPage();
         }
         _isLoading = false;

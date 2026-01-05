@@ -5,6 +5,7 @@ class Dispute {
   final String status; // pending, resolved, rejected
   final String? customerId;
   final String? itemId;
+  final String? matchedItemId; // The item matched by admin to resolve the dispute
   final String? resolutionNotes;
   final String? createdAt;
   final String? updatedAt;
@@ -16,6 +17,7 @@ class Dispute {
     this.status = 'pending',
     this.customerId,
     this.itemId,
+    this.matchedItemId,
     this.resolutionNotes,
     this.createdAt,
     this.updatedAt,
@@ -30,6 +32,7 @@ class Dispute {
       status: map['status'] ?? 'pending',
       customerId: map['customer_id'],
       itemId: map['item_id'],
+      matchedItemId: map['matched_item_id'],
       resolutionNotes: map['resolution_notes'],
       createdAt: map['created_at'],
       updatedAt: map['updated_at'],
@@ -45,6 +48,7 @@ class Dispute {
       'status': status,
       if (customerId != null) 'customer_id': customerId,
       if (itemId != null) 'item_id': itemId,
+      if (matchedItemId != null) 'matched_item_id': matchedItemId,
       if (resolutionNotes != null) 'resolution_notes': resolutionNotes,
     };
   }

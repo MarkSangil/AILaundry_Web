@@ -42,20 +42,14 @@ class SystemSettingsService {
         }
       }
     } catch (e) {
-      // Log error but don't throw - return default instead
-      print('Error loading cut-off time: $e');
     }
-    // Default to 6pm (18:00) only if no value exists in database
     return const TimeOfDay(hour: 18, minute: 0);
   }
 
-  // Set daily cut-off time for washer edits
   Future<void> setDailyCutOffTime(TimeOfDay time) async {
-    // Format as HH:MM (without seconds for consistency)
     final timeString = '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
     
     try {
-      // First, check if the record exists
       final existing = await client
           .from('system_settings')
           .select('id, value')

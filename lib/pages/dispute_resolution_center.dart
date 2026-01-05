@@ -106,7 +106,6 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
                 washerData = washerResponse;
               }
             } catch (e) {
-              debugPrint('Error loading washer: ${safeErrorToString(e)}');
             }
           }
         }
@@ -114,9 +113,22 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
         // Load similar items
         final similar = await _disputeService.getSimilarItems(dispute.id!);
         
+        // Reload dispute to get latest matched_item_id
+        final updatedDisputeResponse = await supabase
+            .from('disputes')
+            .select()
+            .eq('id', dispute.id!)
+            .maybeSingle();
+        
+        Dispute? updatedDispute;
+        if (updatedDisputeResponse != null) {
+          updatedDispute = Dispute.fromMap(updatedDisputeResponse);
+        }
+        
         setState(() {
           _similarItems = similar;
           _relatedWasher = washerData;
+          _selectedDispute = updatedDispute ?? dispute;
           _loadingItemDetails = false;
         });
       } catch (e) {
@@ -192,8 +204,6 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
             'is_read': false,
           });
         } catch (e) {
-          // Log error but don't fail the dispute resolution
-          debugPrint('Error creating notification: ${safeErrorToString(e)}');
         }
       }
       
@@ -266,6 +276,53 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
         ),
       ),
     );
+  }
+
+  Future<void> _matchItemToDispute(String matchedItemId) async {
+    if (_selectedDispute == null || _selectedDispute!.id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No dispute selected'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    try {
+      // Match the item to the dispute
+      final updatedDispute = await _disputeService.matchItemToDispute(
+        _selectedDispute!.id!,
+        matchedItemId,
+        resolutionNotes: 'Item matched by admin',
+      );
+
+      // Update the selected dispute
+      setState(() {
+        _selectedDispute = updatedDispute;
+      });
+
+      // Reload disputes list to show updated match status
+      await _loadDisputes();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Item matched successfully'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error matching item: ${safeErrorToString(e)}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _notifyCustomer(Dispute dispute) async {
@@ -1199,23 +1256,33 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
                   itemCount: _similarItems.length,
                   itemBuilder: (context, index) {
                     final item = _similarItems[index];
+                    final itemId = item['id'] as String?;
+                    final isMatched = _selectedDispute?.matchedItemId == itemId;
+                    
                     return Card(
-                      elevation: 1,
+                      elevation: isMatched ? 3 : 1,
                       clipBehavior: Clip.antiAlias,
                       margin: EdgeInsets.zero,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(6),
+                        side: isMatched 
+                            ? BorderSide(color: Colors.green, width: 2)
+                            : BorderSide.none,
                       ),
-                      child: InkWell(
-                        onTap: () {
-                          if (item['image_url'] != null) {
-                            _showImageDialog(
-                              item['image_url'],
-                              '${item['type'] ?? 'Item'} - ${item['brand'] ?? 'Unknown'}',
-                            );
-                          }
-                        },
-                        child: Row(
+                      color: isMatched ? Colors.green.shade50 : null,
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              onTap: () {
+                                if (item['image_url'] != null) {
+                                  _showImageDialog(
+                                    item['image_url'],
+                                    '${item['type'] ?? 'Item'} - ${item['brand'] ?? 'Unknown'}',
+                                  );
+                                }
+                              },
+                              child: Row(
                           crossAxisAlignment: CrossAxisAlignment.center,
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -1315,8 +1382,54 @@ class _DisputeResolutionCenterState extends State<DisputeResolutionCenter> {
                                 ),
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                          // Match button
+                          Container(
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: isMatched 
+                                  ? Colors.green.shade100 
+                                  : colorScheme.primaryContainer,
+                              border: Border(
+                                top: BorderSide(
+                                  color: colorScheme.outline.withOpacity(0.2),
+                                ),
+                              ),
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _matchItemToDispute(itemId ?? ''),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        isMatched ? Icons.check_circle : Icons.link,
+                                        size: 16,
+                                        color: isMatched 
+                                            ? Colors.green.shade700 
+                                            : colorScheme.onPrimaryContainer,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        isMatched ? 'Matched' : 'Match Item',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: isMatched 
+                                              ? Colors.green.shade700 
+                                              : colorScheme.onPrimaryContainer,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   },

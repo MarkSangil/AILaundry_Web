@@ -99,8 +99,6 @@ class _ManagerDashboardState extends State<ManagerDashboard> with SingleTickerPr
             }
           }
         } catch (e) {
-          // Silently fail - logout logging shouldn't block logout
-          debugPrint('Failed to log logout activity: ${safeErrorToString(e)}');
         }
       }
       

@@ -98,6 +98,29 @@ class DisputeService {
     return Dispute.fromMap(response);
   }
 
+  /// Match a similar item with a dispute
+  /// This allows admins to link a similar item to resolve the dispute
+  Future<Dispute> matchItemToDispute(String disputeId, String matchedItemId, {String? resolutionNotes}) async {
+    final updates = <String, dynamic>{
+      'matched_item_id': matchedItemId,
+    };
+    
+    // Optionally update status to resolved if not already
+    // You can customize this behavior
+    if (resolutionNotes != null) {
+      updates['resolution_notes'] = resolutionNotes;
+    }
+    
+    final response = await client
+        .from('disputes')
+        .update(updates)
+        .eq('id', disputeId)
+        .select()
+        .single();
+
+    return Dispute.fromMap(response);
+  }
+
   Future<List<Map<String, dynamic>>> getSimilarItems(String disputeId) async {
     // Get the disputed item first
     final disputeResponse = await client

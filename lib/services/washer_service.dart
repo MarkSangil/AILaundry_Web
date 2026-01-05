@@ -139,27 +139,15 @@ class WasherService {
       } catch (rpcError) {
         final errorString = rpcError.toString().toLowerCase();
         
-        // Log the full error for debugging
-        print('RPC call error: $rpcError');
-        print('Error string: $errorString');
-        
-        // Function might not exist, try direct update
         if (errorString.contains('function') || 
             errorString.contains('does not exist') ||
             errorString.contains('42883') ||
             errorString.contains('not found')) {
-          // Function doesn't exist, try direct update
-          print('RPC function update_laundry_user not found, trying direct update');
         } else {
-          // Other RPC error - might be permission, parameter mismatch, or other issue
-          print('RPC error (might be parameter mismatch or permission): $rpcError');
-          // Re-throw to show the actual error to the user
           throw Exception('RPC function error: $rpcError. Please check: 1) Function exists in public schema, 2) Function signature matches (UUID, JSONB), 3) You have execute permission.');
         }
       }
       
-      // Fallback to direct update
-      // First check if user exists
       final userCheck = await client
           .from('laundry_users')
           .select('id')
@@ -171,18 +159,18 @@ class WasherService {
       }
       
       // Perform the update
-      final response = await client
-          .from('laundry_users')
-          .update(updates)
-          .eq('id', id)
-          .select()
+    final response = await client
+        .from('laundry_users')
+        .update(updates)
+        .eq('id', id)
+        .select()
           .maybeSingle();
 
       if (response == null) {
         throw Exception('Update failed. No rows were updated. This is likely due to Row Level Security (RLS) policies. Please run the SQL in create_update_functions.sql in your Supabase SQL Editor to create the update_laundry_user function that bypasses RLS.');
       }
 
-      return Washer.fromMap(response);
+    return Washer.fromMap(response);
     } catch (e) {
       // Handle permission/RLS errors
       final errorString = e.toString().toLowerCase();
@@ -226,18 +214,13 @@ class WasherService {
               : (updatedValue == 1 || updatedValue == true || updatedValue == 'true');
           
           if (actualBool != expectedBool) {
-            print('Warning: Status update verification mismatch. Expected: $expectedBool, Got: $actualBool');
           }
-          return; // Success
+          return;
         }
       } catch (rpcError) {
-        // Function might not exist, try direct update
         if (rpcError.toString().contains('function') || 
             rpcError.toString().contains('does not exist')) {
-          // Function doesn't exist, try direct update
-          // This will work if RLS allows it
         } else {
-          // Other RPC error, rethrow
           throw rpcError;
         }
       }
@@ -251,9 +234,7 @@ class WasherService {
           .select('is_active')
           .maybeSingle();
       
-      // Check if update was successful
       if (updateResponse == null) {
-        // Try to verify if user exists
         final userCheck = await client
             .from('laundry_users')
             .select('id')
@@ -267,7 +248,6 @@ class WasherService {
         }
       }
       
-      // Verify the update worked (handle both boolean and integer types)
       final updatedValue = updateResponse['is_active'];
       final bool expectedBool = isActive;
       final bool actualBool = updatedValue is bool 
@@ -275,18 +255,13 @@ class WasherService {
           : (updatedValue == 1 || updatedValue == true || updatedValue == 'true');
       
       if (actualBool != expectedBool) {
-        // Log warning but don't throw - the update might have succeeded but verification failed
-        // This could happen due to database triggers or type conversions
-        print('Warning: Status update verification mismatch. Expected: $expectedBool, Got: $actualBool');
       }
     } catch (e) {
-      // If is_active column doesn't exist, throw a helpful error
       if (e.toString().contains('is_active') || 
           e.toString().contains('PGRST204') ||
           (e.toString().contains('column') && e.toString().contains('does not exist'))) {
         throw Exception('The is_active column does not exist in the database. Please run the migration to add it.');
       }
-      // If it's a permission/RLS error
       if (e.toString().contains('permission') || 
           e.toString().contains('RLS') ||
           e.toString().contains('PGRST301') ||

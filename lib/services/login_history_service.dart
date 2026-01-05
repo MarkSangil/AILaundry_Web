@@ -61,8 +61,6 @@ class LoginHistoryService {
         }
       }
     } catch (e) {
-      // Silently fail - login logging shouldn't block the login process
-      print('Failed to log login: $e');
       return null;
     }
   }
@@ -96,8 +94,6 @@ class LoginHistoryService {
               .eq('id', loginId);
         }
       } catch (e2) {
-        // Silently fail - logout logging is not critical
-        print('Failed to log logout: $e2');
       }
     }
   }

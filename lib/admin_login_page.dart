@@ -132,12 +132,9 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
             userAgent: userAgent,
           );
         } catch (e) {
-          // Silently fail - login logging shouldn't block login
-          print('Failed to log login activity: $e');
         }
       } catch (e) {
         if (mounted) {
-          // Show user-friendly error without signing out
           String errorMessage = "Error verifying user role. Please try again.";
           final errorString = e.toString().toLowerCase();
           
@@ -146,7 +143,6 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
           } else if (errorString.contains('permission') || errorString.contains('rls')) {
             errorMessage = "Permission error. Please contact an administrator.";
           } else {
-            debugPrint('Role verification error: $e');
           }
           
           setState(() => _error = errorMessage);
@@ -192,8 +188,6 @@ class _AdminLoginPageState extends State<AdminLoginPage> with TickerProviderStat
                    errorString.contains('connection')) {
           errorMessage = "Network error. Please check your connection and try again.";
         } else {
-          // For other errors, show a generic message but log the actual error
-          debugPrint('Login error: $e');
           errorMessage = "Login failed. Please check your credentials and try again.";
         }
         
