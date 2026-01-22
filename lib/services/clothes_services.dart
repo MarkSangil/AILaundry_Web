@@ -65,10 +65,51 @@ class ClothesService {
 
   Future<void> deleteItem(String itemId) async {
     // Hard delete - permanently remove the item
-    await client
+    // First verify the item exists
+    final existingItem = await client
+        .from('clothes')
+        .select('id')
+        .eq('id', itemId)
+        .maybeSingle();
+
+    if (existingItem == null) {
+      throw Exception('Item not found with id: $itemId');
+    }
+
+    // Perform the deletion
+    final deleteResponse = await client
         .from('clothes')
         .delete()
-        .eq('id', itemId);
+        .eq('id', itemId)
+        .select('id');
+
+    // Verify deletion was successful
+    final deletedRows = List<Map<String, dynamic>>.from(deleteResponse);
+    if (deletedRows.isEmpty) {
+      throw Exception(
+        'Delete failed: No rows were deleted. This usually means:\n'
+        '1. Row Level Security (RLS) policies are blocking the deletion\n'
+        '2. The item does not exist\n'
+        '3. You do not have permission to delete this item\n\n'
+        'Item ID: $itemId'
+      );
+    }
+
+    // Double-check by trying to fetch the item
+    final verifyDeleted = await client
+        .from('clothes')
+        .select('id')
+        .eq('id', itemId)
+        .maybeSingle();
+
+    if (verifyDeleted != null) {
+      throw Exception(
+        'Delete failed: Item still exists after deletion. This may indicate:\n'
+        '1. Row Level Security (RLS) policies are preventing the deletion\n'
+        '2. Database constraints are blocking the deletion\n\n'
+        'Item ID: $itemId'
+      );
+    }
   }
 
   Future<void> updateItem(String itemId, Map<String, dynamic> updates) async {
@@ -85,10 +126,10 @@ class ClothesService {
     }
 
     try {
-      // First, verify the item exists
+      // First, fetch the full existing item to compare changes and log them
       final existingItem = await client
           .from('clothes')
-          .select('id, status')
+          .select('id, type, brand, color, status, washer_id, checker_id, image_url')
           .eq('id', itemId)
           .maybeSingle();
 
@@ -121,7 +162,7 @@ class ClothesService {
       // Verify the update by fetching the item separately to check the actual values
       final updatedItem = await client
           .from('clothes')
-          .select('id, status')
+          .select('id, type, brand, color, status, washer_id, checker_id, image_url')
           .eq('id', itemId)
           .maybeSingle();
 
@@ -146,20 +187,61 @@ class ClothesService {
         );
       }
 
-      // Log status change using RPC function (backup to database trigger)
-      if (cleanUpdates.containsKey('status')) {
-        final currentUser = client.auth.currentUser;
+      // Log all changes to audit log
+      final currentUser = client.auth.currentUser;
+      if (currentUser != null) {
         try {
-          await client.rpc('log_status_change_rpc', params: {
-            'p_clothes_id': itemId,
-            'p_old_status': existingItem['status'],
-            'p_new_status': cleanUpdates['status'] as String,
-            'p_changed_by': currentUser?.id,
-            'p_notes': 'Status updated via admin panel',
-          });
+          // Build change details
+          final changes = <String, Map<String, dynamic>>{};
+          for (var key in cleanUpdates.keys) {
+            final oldValue = existingItem[key];
+            final newValue = updatedItem[key];
+            if (oldValue != newValue) {
+              changes[key] = {
+                'old': oldValue,
+                'new': newValue,
+              };
+            }
+          }
+
+          // Only log if there are actual changes
+          if (changes.isNotEmpty) {
+            // Log status change using RPC function (backup to database trigger)
+            if (cleanUpdates.containsKey('status')) {
+              try {
+                await client.rpc('log_status_change_rpc', params: {
+                  'p_clothes_id': itemId,
+                  'p_old_status': existingItem['status'],
+                  'p_new_status': cleanUpdates['status'] as String,
+                  'p_changed_by': currentUser.id,
+                  'p_notes': 'Status updated via admin panel',
+                });
+              } catch (e) {
+                // Silently fail - the database trigger should handle logging
+                // This is just a backup
+              }
+            }
+
+            // Log all field changes to item_audit_log
+            try {
+              await client.from('item_audit_log').insert({
+                'item_id': itemId,
+                'action': 'edit',
+                'user_id': currentUser.id,
+                'metadata': {
+                  'changes': changes,
+                  'edited_at': DateTime.now().toIso8601String(),
+                  'edited_by': currentUser.id,
+                },
+                'created_at': DateTime.now().toIso8601String(),
+              });
+            } catch (e) {
+              // Silently fail if audit table doesn't exist or logging fails
+              // This is just for tracking, not critical
+            }
+          }
         } catch (e) {
-          // Silently fail - the database trigger should handle logging
-          // This is just a backup
+          // Silently fail - logging is not critical for the update operation
         }
       }
     } catch (e) {

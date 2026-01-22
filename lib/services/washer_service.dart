@@ -98,9 +98,10 @@ class WasherService {
         // Convert updates map to JSONB format for the RPC function
         // Filter out columns that don't exist in laundry_users table
         final updatesJson = <String, dynamic>{};
-        final allowedColumns = {'name', 'email', 'role', 'is_active'};
+        final allowedColumns = {'name', 'email', 'role', 'is_active', 'phone'};
         updates.forEach((key, value) {
-          if (value != null && allowedColumns.contains(key)) {
+          if (allowedColumns.contains(key)) {
+            // Allow null values for phone (to clear it)
             updatesJson[key] = value;
           }
         });

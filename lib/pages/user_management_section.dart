@@ -238,6 +238,9 @@ class _UserManagementSectionState extends State<UserManagementSection> {
                         if (emailController.text.trim() != user.email) {
                           updates['email'] = emailController.text.trim();
                         }
+                        // Update phone number (can be empty/null)
+                        final phoneValue = phoneController.text.trim();
+                        updates['phone'] = phoneValue.isEmpty ? null : phoneValue;
                         await _userService.updateWasher(user.id!, updates);
                       }
                       selectedRoleNotifier.dispose();
